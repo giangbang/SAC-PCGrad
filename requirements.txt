@@ -1,0 +1,5 @@
+gym
+numpy
+matplotlib
+torch
+git+https://github.com/giangbang/gridworld.git
