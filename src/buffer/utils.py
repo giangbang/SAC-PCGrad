@@ -46,3 +46,19 @@ def get_action_dim(action_space: spaces.Space) -> int:
         return int(action_space.n)
     else:
         raise NotImplementedError(f"{action_space} action space is not supported")
+        
+def is_image_space(observation_space: spaces.Space) -> bool:
+    """
+    Check if a observation space has the shape, limits and dtype
+    of a valid image.
+    The check is conservative, so that it returns False if there is a doubt.
+    """
+    if isinstance(observation_space, spaces.Box) and len(observation_space.shape) == 3:
+        # Check the type
+        if observation_space.dtype != np.uint8:
+            return False
+
+        # Check the value range
+        if np.any(observation_space.low != 0) or np.any(observation_space.high != 255):
+            return False
+    return False

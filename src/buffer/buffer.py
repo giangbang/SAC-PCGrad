@@ -7,6 +7,15 @@ from .utils import *
 Transition = namedtuple('Transition',
                         ('states', 'actions', 'rewards', 'next_states', 'dones'))
 
+class BufferTransition(Transition):
+    def get_task(self, task: int):
+        states = self.states[:, task]
+        actions = self.actions[:, task]
+        rewards = self.rewards[:, task]
+        next_states = self.next_states[:, task]
+        dones = self.dones[:, task]
+        return Transition(states, actions, rewards, next_states, dones)
+
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
     def __init__(self, 
@@ -14,23 +23,26 @@ class ReplayBuffer(object):
             action_space: gym.spaces, 
             capacity: int, 
             batch_size: int, 
-            device: str='cpu'
+            device: str='cpu',
+            num_envs: int=1,
     ):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
+        self.num_envs = num_envs
         
         self.obs_shape = get_obs_shape(observation_space)
         self.action_dim = get_action_dim(action_space)
+        self.is_image_obs = is_image_space(observation_space)
 
         # the proprioceptive obs is stored as float32, pixels obs as uint8
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
 
-        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
-        self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
-        self.actions = np.empty((capacity, self.action_dim), dtype=action_space.dtype)
-        self.rewards = np.empty((capacity, 1), dtype=np.float32)
-        self.dones = np.empty((capacity, 1), dtype=np.float32)
+        self.obses = np.empty((capacity, num_envs, *obs_shape), dtype=obs_dtype)
+        self.next_obses = np.empty((capacity, num_envs, *obs_shape), dtype=obs_dtype)
+        self.actions = np.empty((capacity, num_envs, self.action_dim), dtype=action_space.dtype)
+        self.rewards = np.empty((capacity, num_envs, 1), dtype=np.float32)
+        self.dones = np.empty((capacity, num_envs, 1), dtype=np.float32)
 
         self.idx = 0
         self.last_save = 0
@@ -38,6 +50,7 @@ class ReplayBuffer(object):
 
     def add(self, obs, action, reward, next_obs, done, info=None):
         '''Add a new transition to replay buffer'''
+        
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
@@ -53,9 +66,13 @@ class ReplayBuffer(object):
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
-    def sample(self):
-        '''Sample batch of Transitions with batch_size elements.
-        Return a named tuple with 'states', 'actions', 'rewards', 'next_states' and 'dones'. '''
+    def sample(self, callback_on_states=None):
+        '''
+        Sample batch of Transitions with batch_size elements.
+        Return a named tuple with 'states', 'actions', 'rewards', 'next_states' and 'dones'. 
+        `callback_on_state` is helpful when you want to preprocess the states before feeding to neural nets
+        for example, this can be a normalization step, or onehot encoding of tasks
+        '''
         idxs = np.random.randint(
             0, self.capacity if self.full else self.idx, size=self.batch_size
         )
@@ -67,5 +84,9 @@ class ReplayBuffer(object):
             self.next_obses[idxs], device=self.device
         ).float()
         dones = torch.as_tensor(self.dones[idxs], device=self.device)
+        
+        if callback_on_states is not None:
+            obses = callback_on_states(obses)
+            next_obses = callback_on_states(next_obses)
 
-        return Transition(obses, actions, rewards, next_obses, dones)
+        return BufferTransition(obses, actions, rewards, next_obses, dones)

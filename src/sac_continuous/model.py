@@ -44,7 +44,7 @@ class Actor(nn.Module):
     def forward(self, x):
         return self._actor(x).chunk(2, dim=-1)
         
-    def sample(self, x, compute_log_pi=False):
+    def sample(self, x, compute_log_pi=False, deterministic=False):
         '''
         Sample action from policy, return sampled actions and log prob of that action
         In inference time, set the sampled actions to be deterministic by setting
@@ -56,7 +56,7 @@ class Actor(nn.Module):
         '''
         mu, log_std = self.forward(x)
         
-        if not self.training: return torch.tanh(mu), None
+        if deterministic: return torch.tanh(mu), None
         
         # constrain log_std inside [log_std_min, log_std_max]
         log_std = torch.clamp(log_std, min=self.log_std_min, max=self.log_std_max)

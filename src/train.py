@@ -7,19 +7,6 @@ import numpy as np
 import gym
 from utils import parse_args, pprint, seed_everything
 
-def evaluate(env, agent, n_rollout = 10):   
-    tot_rw = 0
-    for _ in range(n_rollout):
-        state = env.reset()
-        done = False
-        while not done:
-            action = agent.select_action(state, True)
-            
-            next_state, reward, done, info = env.step(action)
-            tot_rw += reward
-            state = next_state
-    return tot_rw / n_rollout
-            
 
 if __name__ == '__main__':
     args = parse_args()
