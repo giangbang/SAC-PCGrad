@@ -12,11 +12,9 @@ class SAC:
         device='cpu',
         hidden_dim=50,
         discount=0.99,
-        alpha_lr=3e-4,
-        actor_lr=3e-4,
+        learning_rate=3e-4,
         actor_log_std_min=-10,
         actor_log_std_max=2,
-        critic_lr=3e-4,
         critic_tau=0.005,
         gradient_steps=1,
         num_layers=3,
@@ -29,11 +27,10 @@ class SAC:
         self.critic_tau = critic_tau
         self.reward_scale = reward_scale
         self.gradient_steps = gradient_steps
-        
-        self.actor  = Actor(obs_shape, action_shape, num_layers, 
+        self.actor  = Actor(*obs_shape, action_shape, num_layers, 
                 hidden_dim, actor_log_std_min, actor_log_std_max).to(device)
                 
-        self.critic = Critic(obs_shape, action_shape, num_layers, hidden_dim).to(device)
+        self.critic = Critic(*obs_shape, action_shape, num_layers, hidden_dim).to(device)
         
     def _critic_loss(self, batch, ent_coef):
         # Compute target Q 

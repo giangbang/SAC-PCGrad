@@ -6,6 +6,7 @@ from .buffer import ReplayBuffer
 import torch.nn.functional as F
 import numpy as np
 import os
+from .buffer.buffer import Transition
 from .pcgrad import PCGrad
 
 def evaluate(env, agent, n_rollout):
@@ -48,10 +49,12 @@ class PCGradAgent(object):
         self.env = env
         self.eval_env = eval_env
         self.action_space = env.action_space
+        observation_space = env.single_observation_space
+        action_space = env.single_action_space
         
-        self.buffer = ReplayBuffer(env.observation_space, env.action_space, 
-                buffer_size, batch_size, device)
-        discrete_action = isinstance(env.action_space, gym.spaces.Discrete)
+        self.buffer = ReplayBuffer(observation_space, action_space, 
+                buffer_size, batch_size, device, num_envs = env.num_envs)
+        discrete_action = isinstance(action_space, gym.spaces.Discrete)
         self.batch_size = batch_size
         self.num_envs = env.num_envs
         self.device = device
@@ -64,28 +67,29 @@ class PCGradAgent(object):
             
             self.target_entropy = np.log(self.buffer.action_dim) / 5
         else:
-            assert not self.buffer.is_image_obs, 
+            assert not self.buffer.is_image_obs
             # Onehot representation of task
             obs_shape = [self.num_envs + np.prod(self.buffer.obs_shape).item()]
+            print(obs_shape)
             self.agent = SAC(obs_shape,
                     self.buffer.action_dim, device, *args, **kwargs)
             self.target_entropy = -np.prod(self.buffer.action_dim)
                     
         self.actor_optimizer = PCGrad(
-            torch.optim.Adam(self.agent.actor.parameters(), lr=actor_lr)
+            torch.optim.Adam(self.agent.actor.parameters(), lr=learning_rate)
         )
         
         self.critic_optimizer = PCGrad(
             torch.optim.Adam(
-                self.agent.critic._online_q.parameters(), lr=critic_lr,
+                self.agent.critic._online_q.parameters(), lr=learning_rate,
             )
         )
         
         # Each task has a separated entropy coefficient
-        self.log_ent_coef = torch.log(init_temperature*torch.ones(self.num_envs, device=device)).requires_grad_(True)
+        self.log_ent_coef = torch.log(.5*torch.ones(self.num_envs, device=device)).requires_grad_(True)
         
         self.ent_coef_optimizer = torch.optim.Adam([self.log_ent_coef], 
-                lr=alpha_lr, **optimizer_args
+                lr=learning_rate, 
         )
         
     
@@ -133,6 +137,8 @@ class PCGradAgent(object):
         for gradient_step in range(gradient_steps):
             # batch has size (batch_size x n_task x ...)
             batch = self.buffer.sample()
+            states = create_task_onehot
+
             
             critic_losses.append(self.update_critic(batch))
             actor_losses.append(self.update_actor(batch))
@@ -142,7 +148,7 @@ class PCGradAgent(object):
 
     
     def learn(self, total_timesteps, start_step, 
-                gradient_steps, train_freq, num_eval_episodes=10, 
+                gradient_steps=1, train_freq=1, num_eval_episodes=10, 
                 eval_interval=10000, log_dir='./output',
                 
     ):
@@ -153,11 +159,11 @@ class PCGradAgent(object):
         loss, val = [], []
         for step in range(total_timesteps):
             if step < start_step: 
-                action = np.array([self.action_space.sample() for _ in range(self.num_envs)])
+                actions = env.action_space.sample()
             else: 
-                action = self.agent.select_action(states)
+                actions = self.agent.select_action(states)
                 
-            next_states, rewards, dones, infos = env.step(action)
+            next_states, rewards, dones, infos = env.step(actions)
             
             buffer.add(states, actions, rewards, next_states, dones, infos)
             
@@ -186,10 +192,10 @@ class PCGradAgent(object):
 
         df.to_csv('sac_progress.csv', index=False)
         sac_agent.save('model', total_env_step)
-    
             
     
     def select_action(self, state, deterministic=False):
+        state = self.create_task_onehot(state, torch.arange(self.env.num_envs, dtype=long)).to(self.device)
         return self.agent.select_action(state, deterministic=deterministic)
     
     def create_task_onehot(self, states: torch.Tensor, task_indices):

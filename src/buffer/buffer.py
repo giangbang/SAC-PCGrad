@@ -21,22 +21,29 @@ class ReplayBuffer(object):
     def __init__(self, 
             observation_space: gym.spaces, 
             action_space: gym.spaces, 
-            capacity: int, 
-            batch_size: int, 
+            capacity: int=1_000_000, 
+            batch_size: int=256, 
             device: str='cpu',
-            num_envs: int=1,
+            num_envs: int=None,
     ):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
-        self.num_envs = num_envs
         
+        if num_envs is None:
+            num_envs = 1
+            self.is_multitask_buffer = False
+        else: 
+            self.is_multitask_buffer = True
+        
+        self.num_envs = num_envs
         self.obs_shape = get_obs_shape(observation_space)
         self.action_dim = get_action_dim(action_space)
         self.is_image_obs = is_image_space(observation_space)
 
+        obs_shape = self.obs_shape
         # the proprioceptive obs is stored as float32, pixels obs as uint8
-        obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
+        obs_dtype = observation_space.dtype
 
         self.obses = np.empty((capacity, num_envs, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, num_envs, *obs_shape), dtype=obs_dtype)
@@ -50,7 +57,12 @@ class ReplayBuffer(object):
 
     def add(self, obs, action, reward, next_obs, done, info=None):
         '''Add a new transition to replay buffer'''
-        
+        obs = np.array(obs).reshape(self.obses.shape[1:])
+        action = np.array(action).reshape(self.actions.shape[1:])
+        reward = np.array(reward).reshape(self.rewards.shape[1:])
+        next_obs = np.array(next_obs).reshape(self.next_obses.shape[1:])
+        done = np.array(done).reshape(self.dones.shape[1:])
+
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
@@ -58,10 +70,10 @@ class ReplayBuffer(object):
         np.copyto(self.dones[self.idx], done)
 
         if info is not None:
+            timeout_shape = self.dones.shape[1:]
             # [Important] Handle timeout separately for infinite horizon
-            # For more information, see https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/buffers.py#L213
-            timeout = info.get("TimeLimit.truncated", False)
-            self.dones[self.idx] *= 1-timeout
+            timeout = info.get("TimeLimit.truncated", np.zeros(timeout_shape,dtype=bool))
+            self.dones[self.idx] *= (1-timeout).reshape(*timeout_shape)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -89,4 +101,11 @@ class ReplayBuffer(object):
             obses = callback_on_states(obses)
             next_obses = callback_on_states(next_obses)
 
-        return BufferTransition(obses, actions, rewards, next_obses, dones)
+        batch_return = BufferTransition(obses, actions, rewards, next_obses, dones)
+        
+        if not self.is_multitask_buffer: 
+            return self._discard_env_dimension(batch_return)
+        return batch_return
+        
+    def _discard_env_dimension(self, transitions: BufferTransition):
+        return Transition(*map(lambda x:x.squeeze(axis=1), transitions))
