@@ -21,7 +21,7 @@ class ReplayBuffer(object):
     def __init__(self, 
             observation_space: gym.spaces, 
             action_space: gym.spaces, 
-            capacity: int=1_000_000, 
+            capacity: int=1000000, 
             batch_size: int=256, 
             device: str='cpu',
             num_envs: int=None,
