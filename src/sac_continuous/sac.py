@@ -58,10 +58,10 @@ class SAC:
         
         return actor_loss
     
-    def _alpha_loss(self, batch, ent_coef):
+    def _alpha_loss(self, batch, ent_coef, target_entropy):
         with torch.no_grad():
             pi, log_pi = self.actor.sample(batch.states, compute_log_pi=True)
-        alpha_loss = -(ent_coef * (log_pi + self.target_entropy).detach()).mean()
+        alpha_loss = -(ent_coef * (log_pi + target_entropy).detach()).mean()
         
         return alpha_loss
         

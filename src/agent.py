@@ -6,7 +6,7 @@ from .buffer import ReplayBuffer
 import torch.nn.functional as F
 import numpy as np
 import os
-from .buffer.buffer import Transition
+from .buffer.buffer import BufferTransition
 from .pcgrad import PCGrad
 
 def evaluate(env, agent, n_rollout):
@@ -25,7 +25,7 @@ def evaluate(env, agent, n_rollout):
         rewards += reward * (cnt < n_rollout) 
         cnt += done
         
-        states = state
+        states = next_state
     return np.mean(rewards) / n_rollout
 
 class PCGradAgent(object):
@@ -70,7 +70,6 @@ class PCGradAgent(object):
             assert not self.buffer.is_image_obs
             # Onehot representation of task
             obs_shape = [self.num_envs + np.prod(self.buffer.obs_shape).item()]
-            print(obs_shape)
             self.agent = SAC(obs_shape,
                     self.buffer.action_dim, device, *args, **kwargs)
             self.target_entropy = -np.prod(self.buffer.action_dim)
@@ -91,7 +90,6 @@ class PCGradAgent(object):
         self.ent_coef_optimizer = torch.optim.Adam([self.log_ent_coef], 
                 lr=learning_rate, 
         )
-        
     
     def update_critic(self, batch):
         critic_losses = []
@@ -123,8 +121,10 @@ class PCGradAgent(object):
         
     def update_alpha(self, batch):
         alpha_loss = 0
-        for i_task in range(self.num_envs):
-            alpha_loss += self.agent._alpha_loss
+        env_coefs = self.log_ent_coef
+        for i_task, ent_coef in zip(range(self.num_envs), env_coefs):
+            alpha_loss = alpha_loss + self.agent._alpha_loss(batch.get_task(i_task), 
+                    ent_coef, self.target_entropy)
         
         self.ent_coef_optimizer.zero_grad()
         alpha_loss.backward()
@@ -137,8 +137,14 @@ class PCGradAgent(object):
         for gradient_step in range(gradient_steps):
             # batch has size (batch_size x n_task x ...)
             batch = self.buffer.sample()
-            states = create_task_onehot
 
+            states = self.create_batch_onehot(batch.states)
+            next_states = self.create_batch_onehot(batch.next_states)
+            actions = batch.actions
+            rewards = batch.rewards
+            dones = batch.dones
+            
+            batch = BufferTransition(states, actions, rewards, next_states, dones)
             
             critic_losses.append(self.update_critic(batch))
             actor_losses.append(self.update_actor(batch))
@@ -195,9 +201,18 @@ class PCGradAgent(object):
             
     
     def select_action(self, state, deterministic=False):
-        state = self.create_task_onehot(state, torch.arange(self.env.num_envs, dtype=long)).to(self.device)
+        state = torch.from_numpy(np.array(state, dtype=np.float32))
+        if len(state.shape) == 1: state = state.unsqueeze(0)
+        state = self.create_task_onehot(state, torch.arange(self.env.num_envs, dtype=int)).to(self.device)
         return self.agent.select_action(state, deterministic=deterministic)
     
+    def create_batch_onehot(self, states):
+        st = []
+        for i in range(states.shape[1]):
+            st.append(self.create_task_onehot(states[:, i], i).unsqueeze(1))
+        ret = torch.cat(st, dim=1)
+        return ret
+
     def create_task_onehot(self, states: torch.Tensor, task_indices):
         """
         Create onehot representations of the task indices
@@ -207,13 +222,13 @@ class PCGradAgent(object):
             task_indices = torch.LongTensor([task_indices]).to(self.device)
         assert isinstance(task_indices, torch.LongTensor)
         assert len(task_indices.shape) == 1
-        onehots = F.one_hot(task_indices, num_classes=self.num_envs)
+        onehots = F.one_hot(task_indices, num_classes=self.num_envs, )
         
         if len(states.shape) == 1: states = states.unsqueeze(0)
         
-        if task_indices.shape[0] == 1:
+        if onehots.shape[0] == 1:
             broadcast_shape = (*states.shape[:-1], -1)
-            task_indices = task_indices.expand(*broadcast_shape)
-            
-        return torch.cat((states, task_indices), dim=1)
+            onehots = onehots.expand(*broadcast_shape)
+        ret = torch.cat((states, onehots), dim=1)
+        return ret
         

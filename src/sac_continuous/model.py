@@ -78,7 +78,7 @@ class Actor(nn.Module):
                             ),
                             dim = -1, keepdim=True
                         )
-        assert len(log_squash.shape) == 2 and len(squashed_action.shape) == 2
+        assert len(log_squash.shape) == 2 and len(squashed_action.shape) == 2, f'{log_squash.shape} {squashed_action.shape}'
         assert log_squash.shape == log_pi_normal.shape
         return squashed_action, log_squash
 
